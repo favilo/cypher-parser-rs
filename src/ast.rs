@@ -12,6 +12,7 @@ pub struct AstRoot {
 }
 
 impl AstNode for AstRoot {
+    #[inline]
     fn as_ptr(&self) -> *const cypher::cypher_astnode {
         self.ptr
     }
@@ -118,6 +119,7 @@ macro_rules! make_ast_nodes {
                 }
 
                 impl AstNode for [<Ast $enum_name>] {
+                    #[inline]
                     fn as_ptr(&self) -> *const cypher::cypher_astnode {
                         self.ptr
                     }

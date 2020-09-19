@@ -1,12 +1,12 @@
 use errno::Errno;
 use libcypher_parser_sys as cypher;
-use std::ffi::{CStr, NulError};
+use std::ffi::{CStr, NulError, FromBytesWithNulError};
 use thiserror::Error;
 
 mod ast;
 mod result;
 
-pub use result::ParseResult;
+pub use {ast::*, result::ParseResult};
 
 #[non_exhaustive]
 #[derive(Error, Debug)]
@@ -17,8 +17,14 @@ pub enum Error {
     #[error("out of range: {0}")]
     OutOfRangeError(usize),
 
+    #[error("wrong ast node type: {0}")]
+    WrongAstType(AstNodeType),
+
     #[error("error creating c-string")]
     CStringError(#[from] NulError),
+
+    #[error("error creating c-string from byte slice")]
+    CStringBytesError(#[from] FromBytesWithNulError),
 }
 
 pub fn libcypher_parser_version() -> String {

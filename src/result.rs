@@ -1,9 +1,12 @@
-use crate::{ast::AstRoot, Error};
+use crate::{ast::*, Error};
 
 use bitmask::bitmask;
 use errno::errno;
 use libcypher_parser_sys as cypher;
-use std::{ffi::CString, ptr::null_mut};
+use std::{
+    ffi::{CStr, CString},
+    ptr::null_mut,
+};
 
 bitmask! {
     pub mask ParseFlags: u64 where flags ParseOption {
@@ -16,6 +19,17 @@ bitmask! {
 pub enum Colorization {
     Uncolorized,
     Ansi,
+}
+
+impl Colorization {
+    pub fn to_ptr(&self) -> *const cypher::cypher_parser_colorization {
+        unsafe {
+            match self {
+                Colorization::Uncolorized => cypher::cypher_parser_no_colorization,
+                Colorization::Ansi => cypher::cypher_parser_ansi_colorization,
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -49,26 +63,28 @@ impl ParserConfig {
 
     pub fn set_initial_position(&mut self, pos: &ParserInputPosition) {
         unsafe {
-            cypher::cypher_parser_config_set_initial_position(self.ptr, pos.0);
+            cypher::cypher_parser_config_set_initial_position(self.ptr, *pos.0);
         }
     }
 
     pub fn set_error_colorization(&mut self, colorization: Colorization) {
         unsafe {
-            let c = match colorization {
-                Colorization::Uncolorized => cypher::cypher_parser_no_colorization,
-                Colorization::Ansi => cypher::cypher_parser_ansi_colorization,
-            };
+            let c = colorization.to_ptr();
             cypher::cypher_parser_config_set_error_colorization(self.ptr, c);
         }
     }
 }
 
-pub struct ParserInputPosition(cypher::cypher_input_position);
+#[derive(Debug)]
+pub struct ParserInputPosition(Box<cypher::cypher_input_position>);
 
 impl ParserInputPosition {
     pub fn new() -> Self {
-        Self(unsafe { cypher::cypher_input_position_zero })
+        Self(Box::new(cypher::cypher_input_position {
+            line: 1,
+            column: 1,
+            offset: 0,
+        }))
     }
 
     pub fn line(&self) -> u32 {
@@ -100,8 +116,8 @@ impl Drop for ParseResult {
 impl ParseResult {
     pub fn parse(
         input: &str,
-        input_position: Option<ParserInputPosition>,
-        config: Option<ParserConfig>,
+        input_position: Option<&mut ParserInputPosition>,
+        config: Option<&ParserConfig>,
         flags: ParseFlags,
     ) -> Result<Self, Error> {
         let ptr = unsafe {
@@ -109,7 +125,7 @@ impl ParseResult {
                 CString::new(input)?.as_ptr(),
                 input.len() as u64,
                 input_position
-                    .map(|mut p| &mut p.0 as *mut cypher::cypher_input_position)
+                    .map(|p| &mut *p.0 as *mut cypher::cypher_input_position)
                     .unwrap_or(null_mut()),
                 config.map(|c| c.ptr).unwrap_or(null_mut()),
                 *flags,
@@ -158,6 +174,25 @@ impl ParseResult {
     pub fn eof(&self) -> bool {
         unsafe { cypher::cypher_parse_result_eof(self.ptr) as bool }
     }
+
+    unsafe fn ast_fprint(&self, width: u32, c: Colorization, flags: u64) -> Result<String, Error> {
+        let mut mem_ptr: *mut i8 = null_mut();
+        let mut size: usize = 0;
+        let file = libc::open_memstream(&mut mem_ptr as *mut *mut i8, &mut size as *mut usize);
+        cypher::cypher_parse_result_fprint_ast(
+            self.ptr,
+            file as *mut libcypher_parser_sys::_IO_FILE,
+            width,
+            c.to_ptr(),
+            flags,
+        );
+        libc::fflush(file);
+        let ret = CStr::from_ptr(mem_ptr as *mut i8);
+        let ret = ret.to_string_lossy().into_owned();
+        libc::fclose(file);
+        libc::free(mem_ptr as *mut libc::c_void);
+        Ok(ret)
+    }
 }
 
 #[cfg(test)]
@@ -184,9 +219,109 @@ mod tests {
         assert!(root.is_ok());
 
         let root = root?;
+        assert_eq!(root.nchildren(), 1);
         let node_type = root.get_type();
         assert_eq!(node_type, AstNodeType::Statement);
-        assert_eq!(root.type_str().to_owned(), CString::new("statement")?);
+        let boxed = root.to_sub();
+        let unboxed = boxed.downcast_ref::<AstStatement>();
+        assert!(unboxed.is_some());
+        assert_eq!(
+            unboxed.unwrap().type_str().to_owned(),
+            CString::new("statement")?
+        );
+
+        let root_sub = root.to_sub();
+        let wrong = root_sub.downcast_ref::<AstComment>();
+        assert!(wrong.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_fprint() -> Result<(), Error> {
+        let mut p = ParserInputPosition::new();
+        let result = ParseResult::parse(";", Some(&mut p), None, ParseOption::Default.into())?;
+        assert_eq!(p.0.line, 1);
+        assert_eq!(p.0.offset, 1);
+
+        let s = unsafe { result.ast_fprint(10, Colorization::Uncolorized, 0) };
+        assert!(s.is_ok());
+        assert_eq!(s?, "");
+
+        Ok(())
+    }
+
+    #[test]
+    fn comment() -> Result<(), Error> {
+        let mut p = ParserInputPosition::new();
+        let result =
+            ParseResult::parse("/*foo*/", Some(&mut p), None, ParseOption::Default.into())?;
+        assert_eq!(p.0.line, 1);
+        assert_eq!(p.0.offset, 7);
+
+        let s = unsafe { result.ast_fprint(0, Colorization::Uncolorized, 0) };
+        assert!(s.is_ok());
+
+        let expected = "@0  2..5  block_comment  /*foo*/\n";
+        assert_eq!(s?, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn error_only() -> Result<(), Error> {
+        let mut p = ParserInputPosition::new();
+        let result = ParseResult::parse("foo", Some(&mut p), None, ParseOption::Default.into())?;
+        assert_eq!(p.0.line, 1);
+        assert_eq!(p.0.offset, 3);
+
+        let s = unsafe { result.ast_fprint(0, Colorization::Uncolorized, 0) };
+        assert!(s.is_ok());
+
+        let expected = "@0  0..3  error  >>foo<<\n";
+        assert_eq!(s?, expected);
+        assert_eq!(result.nerrors(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn single_statement() -> Result<(), Error> {
+        let mut p = ParserInputPosition::new();
+        let result =
+            ParseResult::parse("return 1", Some(&mut p), None, ParseOption::Default.into())?;
+        assert_eq!(p.0.line, 1);
+        assert_eq!(p.0.offset, 8);
+
+        let s = unsafe { result.ast_fprint(0, Colorization::Uncolorized, 0) };
+        assert!(s.is_ok());
+
+        let expected = "@0  0..8  statement           body=@1\n\
+                        @1  0..8  > query             clauses=[@2]\n\
+                        @2  0..8  > > RETURN          projections=[@3]\n\
+                        @3  7..8  > > > projection    expression=@4, alias=@5\n\
+                        @4  7..8  > > > > integer     1\n\
+                        @5  7..8  > > > > identifier  `1`\n";
+        assert_eq!(s?, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn single_command() -> Result<(), Error> {
+        let mut p = ParserInputPosition::new();
+        let result =
+            ParseResult::parse(":foo bar", Some(&mut p), None, ParseOption::Default.into())?;
+        assert_eq!(p.0.line, 1);
+        assert_eq!(p.0.offset, 8);
+
+        let s = unsafe { result.ast_fprint(0, Colorization::Uncolorized, 0) };
+        assert!(s.is_ok());
+
+        let expected = "@0  0..8  command   name=@1, args=[@2]\n\
+                        @1  1..4  > string  \"foo\"\n\
+                        @2  5..8  > string  \"bar\"\n";
+        assert_eq!(s?, expected);
 
         Ok(())
     }

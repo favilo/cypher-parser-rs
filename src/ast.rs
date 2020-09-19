@@ -12,7 +12,7 @@ pub struct AstRoot {
 }
 
 impl AstNode for AstRoot {
-    fn get_raw(&self) -> *const cypher::cypher_astnode {
+    fn as_ptr(&self) -> *const cypher::cypher_astnode {
         self.ptr
     }
 }
@@ -22,14 +22,14 @@ macro_rules! make_ast_nodes {
 
         paste::paste! {
             pub trait AstNode: mopa::Any {
-                fn get_raw(&self) -> *const cypher::cypher_astnode;
+                fn as_ptr(&self) -> *const cypher::cypher_astnode;
 
                 fn instanceof(&self, t: AstNodeType) -> bool {
-                    unsafe { cypher::cypher_astnode_instanceof(self.get_raw(), t as u8) }
+                    unsafe { cypher::cypher_astnode_instanceof(self.as_ptr(), t as u8) }
                 }
 
                 fn get_type(&self) -> AstNodeType {
-                    let t = unsafe { cypher::cypher_astnode_type(self.get_raw()) };
+                    let t = unsafe { cypher::cypher_astnode_type(self.as_ptr()) };
                     AstNodeType::try_from(t).unwrap()
                 }
 
@@ -42,7 +42,7 @@ macro_rules! make_ast_nodes {
                     let mut size: usize = 0;
                     let file = libc::open_memstream(&mut mem_ptr as *mut *mut i8, &mut size as *mut usize);
                     let returned = cypher::cypher_ast_fprint(
-                        self.get_raw(),
+                        self.as_ptr(),
                         file as *mut libcypher_parser_sys::_IO_FILE,
                         width,
                         c.to_ptr(),
@@ -69,7 +69,7 @@ macro_rules! make_ast_nodes {
                         $(
                             AstNodeType::[<$enum_name>] => {
                                 Box::new([<Ast $enum_name>] {
-                                    ptr: self.get_raw()
+                                    ptr: self.as_ptr()
                                 })
                             }
                         ),*,
@@ -78,11 +78,11 @@ macro_rules! make_ast_nodes {
                 }
 
                 fn nchildren(&self) -> usize {
-                    unsafe { cypher::cypher_astnode_nchildren(self.get_raw()) as usize }
+                    unsafe { cypher::cypher_astnode_nchildren(self.as_ptr()) as usize }
                 }
 
                 fn get_child<'a>(&'a self, idx: usize) -> Result<Box<dyn AstNode>, Error> {
-                    let child = unsafe { cypher::cypher_astnode_get_child(self.get_raw(), idx as u32) };
+                    let child = unsafe { cypher::cypher_astnode_get_child(self.as_ptr(), idx as u32) };
                     if child == null_mut() {
                         Err(Error::OutOfRangeError(idx))
                     } else {
@@ -118,7 +118,7 @@ macro_rules! make_ast_nodes {
                 }
 
                 impl AstNode for [<Ast $enum_name>] {
-                    fn get_raw(&self) -> *const cypher::cypher_astnode {
+                    fn as_ptr(&self) -> *const cypher::cypher_astnode {
                         self.ptr
                     }
                 }
@@ -262,11 +262,11 @@ make_ast_nodes! {
 
 impl AstStatement {
     pub fn noptions(&self) -> usize {
-        unsafe { cypher::cypher_ast_statement_noptions(self.get_raw()) as usize }
+        unsafe { cypher::cypher_ast_statement_noptions(self.as_ptr()) as usize }
     }
 
     pub fn get_option(&self, idx: usize) -> Result<AstStatementOption, Error> {
-        let option = unsafe { cypher::cypher_ast_statement_get_option(self.get_raw(), idx as u32) };
+        let option = unsafe { cypher::cypher_ast_statement_get_option(self.as_ptr(), idx as u32) };
         if option == null_mut() {
             Err(Error::OutOfRangeError(idx))
         } else {

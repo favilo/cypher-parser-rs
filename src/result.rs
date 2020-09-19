@@ -175,7 +175,7 @@ impl ParseResult {
         unsafe { cypher::cypher_parse_result_eof(self.ptr) as bool }
     }
 
-    unsafe fn ast_fprint(&self, width: u32, c: Colorization, flags: u64) -> Result<String, Error> {
+    pub unsafe fn ast_fprint(&self, width: u32, c: Colorization, flags: u64) -> Result<String, Error> {
         let mut mem_ptr: *mut i8 = null_mut();
         let mut size: usize = 0;
         let file = libc::open_memstream(&mut mem_ptr as *mut *mut i8, &mut size as *mut usize);

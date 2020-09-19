@@ -410,7 +410,7 @@ impl AstIdentifier {
 }
 
 impl AstString {
-    pub fn get_valuestr(&self) -> String {
+    pub fn get_value(&self) -> String {
         let s = unsafe {
             let s = cypher::cypher_ast_string_get_value(self.as_ptr());
             CStr::from_ptr(s)

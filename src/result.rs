@@ -49,7 +49,7 @@ impl ParserConfig {
     pub fn new() -> Result<Self, Error> {
         let ptr = unsafe { cypher::cypher_parser_new_config() };
         if ptr == null_mut() {
-            Err(Error::ParseError(errno()))
+            Err(Error::ParserError(errno()))
         } else {
             Ok(Self { ptr })
         }
@@ -101,6 +101,11 @@ impl ParserInputPosition {
 }
 
 #[derive(Debug)]
+pub struct ParseError {
+    ptr: *const cypher::cypher_parse_error,
+}
+
+#[derive(Debug)]
 pub struct ParseResult {
     ptr: *mut cypher::cypher_parse_result,
 }
@@ -132,7 +137,7 @@ impl ParseResult {
             )
         };
         if ptr == null_mut() {
-            Err(Error::ParseError(errno()))
+            Err(Error::ParserError(errno()))
         } else {
             Ok(Self { ptr })
         }
@@ -159,23 +164,46 @@ impl ParseResult {
         unsafe { cypher::cypher_parse_result_ndirectives(self.ptr) as usize }
     }
 
-    pub fn get_directive(&self, _idx: usize) -> Result<(), Error> {
-        todo!()
+    pub fn get_directive(&self, idx: usize) -> Result<Box<dyn AstNode>, Error> {
+        let ptr = unsafe { cypher::cypher_parse_result_get_directive(self.ptr, idx as u32) };
+        if ptr == null_mut() {
+            Err(Error::OutOfRangeError(idx))
+        } else {
+            Ok(AstRoot { ptr }.to_sub())
+        }
+    }
+
+    pub fn directives<'a>(&'a self) -> AstNodeIter<'a, Box<dyn AstNode>, ParseResult> {
+        AstNodeIter {
+            obj: self,
+            idx: 0,
+            func: &ParseResult::get_directive,
+        }
     }
 
     pub fn nerrors(&self) -> usize {
         unsafe { cypher::cypher_parse_result_nerrors(self.ptr) as usize }
     }
 
-    pub fn get_error(&self, _idx: usize) -> Result<(), Error> {
-        todo!()
+    pub fn get_error(&self, idx: usize) -> Result<ParseError, Error> {
+        let ptr = unsafe { cypher::cypher_parse_result_get_error(self.ptr, idx as u32) };
+        if ptr == null_mut() {
+            Err(Error::OutOfRangeError(idx))
+        } else {
+            Ok(ParseError { ptr })
+        }
     }
 
     pub fn eof(&self) -> bool {
         unsafe { cypher::cypher_parse_result_eof(self.ptr) as bool }
     }
 
-    pub unsafe fn ast_fprint(&self, width: u32, c: Colorization, flags: u64) -> Result<String, Error> {
+    pub unsafe fn ast_fprint(
+        &self,
+        width: u32,
+        c: Colorization,
+        flags: u64,
+    ) -> Result<String, Error> {
         let mut mem_ptr: *mut i8 = null_mut();
         let mut size: usize = 0;
         let file = libc::open_memstream(&mut mem_ptr as *mut *mut i8, &mut size as *mut usize);
@@ -212,6 +240,10 @@ mod tests {
         assert_eq!(result.nroots(), 1);
         assert_eq!(result.ndirectives(), 1);
         assert_eq!(result.nerrors(), 0);
+
+        assert!(result.get_directive(0).is_ok());
+        assert!(result.get_directive(0)?.is::<AstStatement>());
+        assert!(!result.get_directive(0)?.is::<AstCommand>());
 
         assert!(result.eof());
 
@@ -322,6 +354,21 @@ mod tests {
                         @1  1..4  > string  \"foo\"\n\
                         @2  5..8  > string  \"bar\"\n";
         assert_eq!(s?, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn directives_work() -> Result<(), Error> {
+        let mut p = ParserInputPosition::new();
+        let result =
+            ParseResult::parse("return 1", Some(&mut p), None, ParseOption::Default.into())?;
+        assert_eq!(p.0.line, 1);
+        assert_eq!(p.0.offset, 8);
+        assert_eq!(result.ndirectives(), 1);
+        for directive in result.directives() {
+            assert_eq!(directive.get_type(), AstNodeType::Statement);
+        }
 
         Ok(())
     }

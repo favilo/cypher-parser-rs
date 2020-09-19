@@ -18,9 +18,24 @@ impl AstNode for AstRoot {
     }
 }
 
+pub struct AstNodeIter<'a, Node, T> {
+    pub(crate) obj: &'a T,
+    pub(crate) idx: usize,
+    pub(crate) func: &'a dyn Fn(&T, usize) -> Result<Node, Error>,
+}
+
+impl<'a, Node, T> Iterator for AstNodeIter<'a, Node, T> {
+    type Item = Node;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let next = (self.func)(self.obj, self.idx);
+        self.idx += 1;
+        next.map_or(None, Option::Some)
+    }
+}
+
 macro_rules! make_ast_nodes {
     ($($enum_name:ident = $id:literal), +,) => {
-
         paste::paste! {
             pub trait AstNode: mopa::Any {
                 fn as_ptr(&self) -> *const cypher::cypher_astnode;
@@ -32,6 +47,10 @@ macro_rules! make_ast_nodes {
                 fn get_type(&self) -> AstNodeType {
                     let t = unsafe { cypher::cypher_astnode_type(self.as_ptr()) };
                     AstNodeType::try_from(t).unwrap()
+                }
+
+                fn instance_of(&self, t: AstNodeType) -> bool {
+                    unsafe { cypher::cypher_astnode_instanceof(self.as_ptr(), t as u8) }
                 }
 
                 fn type_str<'a>(&'a self) -> &'a CStr {
@@ -57,7 +76,7 @@ macro_rules! make_ast_nodes {
                     if returned == 0 {
                         Ok(ret)
                     } else {
-                        Err(Error::ParseError(errno::errno()))
+                        Err(Error::ParserError(errno::errno()))
                     }
                 }
 
@@ -274,5 +293,192 @@ impl AstStatement {
         } else {
             Ok(AstStatementOption { ptr: option })
         }
+    }
+
+    pub fn options<'a>(&'a self) -> AstNodeIter<'a, AstStatementOption, Self> {
+        AstNodeIter {
+            obj: self,
+            idx: 0,
+            func: &Self::get_option,
+        }
+    }
+
+    pub fn get_body(&self) -> Box<dyn AstNode> {
+        let ptr = unsafe { cypher::cypher_ast_statement_get_body(self.as_ptr()) };
+        AstRoot { ptr }.to_sub()
+    }
+}
+
+impl AstQuery {
+    pub fn noptions(&self) -> usize {
+        unsafe { cypher::cypher_ast_query_noptions(self.as_ptr()) as usize }
+    }
+
+    pub fn get_option(&self, idx: usize) -> Result<AstQueryOption, Error> {
+        let option = unsafe { cypher::cypher_ast_query_get_option(self.as_ptr(), idx as u32) };
+        if option == null_mut() {
+            Err(Error::OutOfRangeError(idx))
+        } else {
+            Ok(AstQueryOption { ptr: option })
+        }
+    }
+
+    pub fn options<'a>(&'a self) -> AstNodeIter<'a, AstQueryOption, Self> {
+        AstNodeIter {
+            obj: self,
+            idx: 0,
+            func: &Self::get_option,
+        }
+    }
+
+    pub fn nclauses(&self) -> usize {
+        unsafe { cypher::cypher_ast_query_nclauses(self.as_ptr()) as usize }
+    }
+
+    pub fn get_clause(&self, idx: usize) -> Result<Box<dyn AstNode>, Error> {
+        let option = unsafe { cypher::cypher_ast_query_get_clause(self.as_ptr(), idx as u32) };
+        if option == null_mut() {
+            Err(Error::OutOfRangeError(idx))
+        } else {
+            Ok(AstQueryOption { ptr: option }.to_sub())
+        }
+    }
+
+    pub fn clauses<'a>(&'a self) -> AstNodeIter<'a, Box<dyn AstNode>, Self> {
+        AstNodeIter {
+            obj: self,
+            idx: 0,
+            func: &Self::get_clause,
+        }
+    }
+}
+
+impl AstReturn {
+    pub fn nprojections(&self) -> usize {
+        unsafe { cypher::cypher_ast_return_nprojections(self.as_ptr()) as usize }
+    }
+
+    pub fn get_projection(&self, idx: usize) -> Result<AstProjection, Error> {
+        let option = unsafe { cypher::cypher_ast_return_get_projection(self.as_ptr(), idx as u32) };
+        if option == null_mut() {
+            Err(Error::OutOfRangeError(idx))
+        } else {
+            Ok(AstProjection { ptr: option })
+        }
+    }
+
+    pub fn projections<'a>(&'a self) -> AstNodeIter<'a, AstProjection, Self> {
+        AstNodeIter {
+            obj: self,
+            idx: 0,
+            func: &Self::get_projection,
+        }
+    }
+}
+
+impl AstProjection {
+    pub fn get_alias(&self) -> Option<AstIdentifier> {
+        let ptr = unsafe { cypher::cypher_ast_projection_get_alias(self.as_ptr()) };
+
+        if ptr == null_mut() {
+            None
+        } else {
+            Some(AstIdentifier { ptr })
+        }
+    }
+
+    // TODO: The docs say null isn't possible, but maybe we should not trust that
+    pub fn get_expression(&self) -> Option<Box<dyn AstNode>> {
+        let ptr = unsafe { cypher::cypher_ast_projection_get_expression(self.as_ptr()) };
+
+        if ptr == null_mut() {
+            None
+        } else {
+            Some(AstExpression { ptr }.to_sub())
+        }
+    }
+}
+
+impl AstIdentifier {
+    pub fn get_name(&self) -> String {
+        let s = unsafe {
+            let s = cypher::cypher_ast_identifier_get_name(self.as_ptr());
+            CStr::from_ptr(s)
+        };
+        s.to_string_lossy().into_owned()
+    }
+}
+
+impl AstString {
+    pub fn get_valuestr(&self) -> String {
+        let s = unsafe {
+            let s = cypher::cypher_ast_string_get_value(self.as_ptr());
+            CStr::from_ptr(s)
+        };
+        s.to_string_lossy().into_owned()
+    }
+}
+
+impl AstInteger {
+    pub fn get_valuestr(&self) -> String {
+        let s = unsafe {
+            let s = cypher::cypher_ast_integer_get_valuestr(self.as_ptr());
+            CStr::from_ptr(s)
+        };
+        s.to_string_lossy().into_owned()
+    }
+}
+
+impl AstFloat {
+    pub fn get_valuestr(&self) -> String {
+        let s = unsafe {
+            let s = cypher::cypher_ast_float_get_valuestr(self.as_ptr());
+            CStr::from_ptr(s)
+        };
+        s.to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ParseOption, ParseResult};
+
+    #[test]
+    fn statement_body() -> Result<(), Error> {
+        let result = ParseResult::parse("return 1", None, None, ParseOption::Default.into())?;
+        assert_eq!(result.ndirectives(), 1);
+        let statement = result.get_directive(0)?;
+        assert_eq!(statement.get_type(), AstNodeType::Statement);
+        let statement = statement.downcast_ref::<AstStatement>().unwrap();
+        assert_eq!(statement.noptions(), 0);
+
+        let body = statement.get_body();
+        let body = body.downcast_ref::<AstQuery>().unwrap();
+        assert_eq!(body.get_type(), AstNodeType::Query);
+
+        assert_eq!(body.nclauses(), 1);
+        let clause = body.get_clause(0)?;
+        assert_eq!(clause.get_type(), AstNodeType::Return);
+        let clause = clause.downcast_ref::<AstReturn>().unwrap();
+
+        assert_eq!(clause.nprojections(), 1);
+        let projection = clause.get_projection(0)?;
+        assert_eq!(projection.get_type(), AstNodeType::Projection);
+
+        let alias = projection.get_alias().unwrap();
+        assert_eq!(alias.get_type(), AstNodeType::Identifier);
+        assert_eq!(alias.get_name(), "1");
+
+        let expression = projection.get_expression().unwrap();
+        assert_eq!(expression.get_type(), AstNodeType::Integer);
+        assert!(expression.instance_of(AstNodeType::Integer));
+        assert!(expression.instance_of(AstNodeType::Expression));
+
+        let integer = expression.downcast_ref::<AstInteger>().unwrap();
+
+        assert_eq!(integer.get_valuestr(), "1");
+
+        Ok(())
     }
 }

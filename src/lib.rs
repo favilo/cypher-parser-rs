@@ -1,18 +1,21 @@
 use errno::Errno;
 use libcypher_parser_sys as cypher;
-use std::ffi::{CStr, NulError, FromBytesWithNulError};
+use std::ffi::{CStr, FromBytesWithNulError, NulError};
 use thiserror::Error;
 
 mod ast;
 mod result;
 
-pub use {ast::*, result::ParseResult};
+pub use {
+    ast::*,
+    result::{ParseError, ParseFlags, ParseOption, ParseResult, ParserConfig, ParserInputPosition},
+};
 
 #[non_exhaustive]
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("parse error: {0}")]
-    ParseError(Errno),
+    ParserError(Errno),
 
     #[error("out of range: {0}")]
     OutOfRangeError(usize),

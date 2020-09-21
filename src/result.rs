@@ -1,6 +1,7 @@
 use crate::{ast::*, Error};
 
 use bitmask::bitmask;
+use boolinator::Boolinator;
 use errno::errno;
 use libcypher_parser_sys as cypher;
 use std::{
@@ -48,11 +49,7 @@ impl Drop for ParserConfig {
 impl ParserConfig {
     pub fn new() -> Result<Self, Error> {
         let ptr = unsafe { cypher::cypher_parser_new_config() };
-        if ptr == null_mut() {
-            Err(Error::ParserError(errno()))
-        } else {
-            Ok(Self { ptr })
-        }
+        (ptr != null_mut()).as_result(Self { ptr }, Error::ParserError(errno()))
     }
 
     pub fn set_initial_ordinal(&mut self, n: usize) {
@@ -136,11 +133,7 @@ impl ParseResult {
                 *flags,
             )
         };
-        if ptr == null_mut() {
-            Err(Error::ParserError(errno()))
-        } else {
-            Ok(Self { ptr })
-        }
+        (ptr != null_mut()).as_result(Self { ptr }, Error::ParserError(errno()))
     }
 
     pub fn nnodes(&self) -> usize {
@@ -153,11 +146,7 @@ impl ParseResult {
 
     pub fn get_root(&self, idx: usize) -> Result<AstRoot, Error> {
         let ptr = unsafe { cypher::cypher_parse_result_get_root(self.ptr, idx as u32) };
-        if ptr == null_mut() {
-            Err(Error::OutOfRangeError(idx))
-        } else {
-            Ok(AstRoot { ptr })
-        }
+        (ptr != null_mut()).as_result(AstRoot { ptr }, Error::OutOfRangeError(idx))
     }
 
     pub fn ndirectives(&self) -> usize {
@@ -165,19 +154,19 @@ impl ParseResult {
     }
 
     pub fn get_directive(&self, idx: usize) -> Result<Box<dyn AstNode>, Error> {
+        // There is a bug in the underlying C code, if you try to pass one past ndirectives,
+        // this seems to try to parse out an ast node of type 113, which doesn't exist...
+        // May want to submit a PR.
         let ptr = unsafe { cypher::cypher_parse_result_get_directive(self.ptr, idx as u32) };
-        if ptr == null_mut() {
-            Err(Error::OutOfRangeError(idx))
-        } else {
-            Ok(AstRoot { ptr }.to_sub())
-        }
+        (ptr != null_mut()).as_result(AstRoot { ptr }.to_sub(), Error::OutOfRangeError(idx))
     }
 
-    pub fn directives<'a>(&'a self) -> AstNodeIter<'a, Box<dyn AstNode>, ParseResult> {
+    pub fn directives<'a>(&'a self) -> AstNodeIter<'a, Box<dyn AstNode>, Self> {
         AstNodeIter {
             obj: self,
             idx: 0,
-            func: &ParseResult::get_directive,
+            max: self.ndirectives(),
+            func: &Self::get_directive,
         }
     }
 
@@ -187,11 +176,7 @@ impl ParseResult {
 
     pub fn get_error(&self, idx: usize) -> Result<ParseError, Error> {
         let ptr = unsafe { cypher::cypher_parse_result_get_error(self.ptr, idx as u32) };
-        if ptr == null_mut() {
-            Err(Error::OutOfRangeError(idx))
-        } else {
-            Ok(ParseError { ptr })
-        }
+        (ptr != null_mut()).as_result(ParseError { ptr }, Error::OutOfRangeError(idx))
     }
 
     pub fn eof(&self) -> bool {

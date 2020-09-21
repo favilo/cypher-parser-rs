@@ -1,5 +1,6 @@
 use crate::{result::Colorization, Error};
 
+use boolinator::Boolinator;
 use libcypher_parser_sys as cypher;
 use mopa::mopafy;
 use num_derive::FromPrimitive;
@@ -21,6 +22,7 @@ impl AstNode for AstRoot {
 pub struct AstNodeIter<'a, Node, T> {
     pub(crate) obj: &'a T,
     pub(crate) idx: usize,
+    pub(crate) max: usize,
     pub(crate) func: &'a dyn Fn(&T, usize) -> Result<Node, Error>,
 }
 
@@ -28,6 +30,9 @@ impl<'a, Node, T> Iterator for AstNodeIter<'a, Node, T> {
     type Item = Node;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.idx == self.max {
+            return None;
+        }
         let next = (self.func)(self.obj, self.idx);
         self.idx += 1;
         next.map_or(None, Option::Some)
@@ -46,7 +51,7 @@ macro_rules! make_ast_nodes {
 
                 fn get_type(&self) -> AstNodeType {
                     let t = unsafe { cypher::cypher_astnode_type(self.as_ptr()) };
-                    AstNodeType::try_from(t).unwrap()
+                    AstNodeType::try_from(t).expect("Should be valid type")
                 }
 
                 fn instance_of(&self, t: AstNodeType) -> bool {
@@ -299,6 +304,7 @@ impl AstStatement {
         AstNodeIter {
             obj: self,
             idx: 0,
+            max: self.noptions(),
             func: &Self::get_option,
         }
     }
@@ -327,6 +333,7 @@ impl AstQuery {
         AstNodeIter {
             obj: self,
             idx: 0,
+            max: self.noptions(),
             func: &Self::get_option,
         }
     }
@@ -348,8 +355,17 @@ impl AstQuery {
         AstNodeIter {
             obj: self,
             idx: 0,
+            max: self.nclauses(),
             func: &Self::get_clause,
         }
+    }
+}
+
+impl AstMatch {
+    pub fn get_pattern(&self) -> Option<AstPattern> {
+        let ptr = unsafe { cypher::cypher_ast_match_get_pattern(self.as_ptr()) };
+
+        (ptr != null_mut()).as_some(AstPattern { ptr })
     }
 }
 
@@ -371,31 +387,67 @@ impl AstReturn {
         AstNodeIter {
             obj: self,
             idx: 0,
+            max: self.nprojections(),
             func: &Self::get_projection,
         }
+    }
+
+    pub fn is_distinct(&self) -> bool {
+        unsafe { cypher::cypher_ast_return_is_distinct(self.as_ptr()) }
+    }
+
+    pub fn has_include_existing(&self) -> bool {
+        unsafe { cypher::cypher_ast_return_has_include_existing(self.as_ptr()) }
+    }
+
+    pub fn get_order_by(&self) -> Option<AstOrderBy> {
+        let ptr = unsafe { cypher::cypher_ast_return_get_order_by(self.as_ptr()) };
+        (ptr != null_mut()).as_some(AstOrderBy { ptr })
+    }
+
+    pub fn get_skip(&self) -> Option<AstReturn> {
+        let ptr = unsafe { cypher::cypher_ast_return_get_skip(self.as_ptr()) };
+        (ptr != null_mut()).as_some(AstReturn { ptr })
+    }
+
+    pub fn get_limit(&self) -> Option<AstInteger> {
+        let ptr = unsafe { cypher::cypher_ast_return_get_limit(self.as_ptr()) };
+        (ptr != null_mut()).as_some(AstInteger { ptr })
+    }
+}
+
+impl AstCreate {
+    pub fn is_unique(&self) -> bool {
+        unsafe { cypher::cypher_ast_create_is_unique(self.as_ptr()) }
+    }
+
+    pub fn get_pattern(&self) -> Option<AstPattern> {
+        let ptr = unsafe { cypher::cypher_ast_create_get_pattern(self.as_ptr()) };
+        (ptr != null_mut()).as_some(AstPattern { ptr })
+    }
+}
+
+impl AstPattern {
+    pub fn npaths(&self) -> usize {
+        unsafe { cypher::cypher_ast_pattern_npaths(self.as_ptr()) as usize }
+    }
+
+    pub fn get_path(&self, idx: usize) -> Result<AstPatternPath, Error> {
+        let ptr = unsafe { cypher::cypher_ast_pattern_get_path(self.as_ptr(), idx as u32) };
+        (ptr != null_mut()).as_result(AstPatternPath { ptr }, Error::OutOfRangeError(idx))
     }
 }
 
 impl AstProjection {
     pub fn get_alias(&self) -> Option<AstIdentifier> {
         let ptr = unsafe { cypher::cypher_ast_projection_get_alias(self.as_ptr()) };
-
-        if ptr == null_mut() {
-            None
-        } else {
-            Some(AstIdentifier { ptr })
-        }
+        (ptr != null_mut()).as_some(AstIdentifier { ptr })
     }
 
     // TODO: The docs say null isn't possible, but maybe we should not trust that
     pub fn get_expression(&self) -> Option<Box<dyn AstNode>> {
         let ptr = unsafe { cypher::cypher_ast_projection_get_expression(self.as_ptr()) };
-
-        if ptr == null_mut() {
-            None
-        } else {
-            Some(AstExpression { ptr }.to_sub())
-        }
+        (ptr != null_mut()).as_some(AstExpression { ptr }.to_sub())
     }
 }
 
@@ -462,6 +514,8 @@ mod tests {
         assert_eq!(clause.get_type(), AstNodeType::Return);
         let clause = clause.downcast_ref::<AstReturn>().unwrap();
 
+        assert!(!clause.is_distinct());
+        assert!(!clause.has_include_existing());
         assert_eq!(clause.nprojections(), 1);
         let projection = clause.get_projection(0)?;
         assert_eq!(projection.get_type(), AstNodeType::Projection);
@@ -478,6 +532,62 @@ mod tests {
         let integer = expression.downcast_ref::<AstInteger>().unwrap();
 
         assert_eq!(integer.get_valuestr(), "1");
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_simple_create() -> Result<(), Error> {
+        let result = ParseResult::parse(
+            "CREATE (n)-[:KNOWS]->(f);",
+            None,
+            None,
+            ParseOption::Default.into(),
+        )?;
+
+        let ast = result.get_directive(0)?;
+        assert_eq!(ast.get_type(), AstNodeType::Statement);
+        let ast = ast.downcast_ref::<AstStatement>().unwrap();
+        let query = ast.get_body();
+        assert_eq!(query.get_type(), AstNodeType::Query);
+        let query = query.downcast_ref::<AstQuery>().unwrap();
+
+        let create = query.get_clause(0)?;
+        assert_eq!(create.get_type(), AstNodeType::Create);
+        let create = create.downcast_ref::<AstCreate>().unwrap();
+        assert!(!create.is_unique());
+
+        let pattern = create.get_pattern().unwrap();
+        assert_eq!(pattern.get_type(), AstNodeType::Pattern);
+        assert_eq!(pattern.npaths(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_single_node() -> Result<(), Error> {
+        let result = ParseResult::parse(
+            "MATCH (n) RETURN n;",
+            None,
+            None,
+            ParseOption::Default.into(),
+        )?;
+
+        let ast = result.get_directive(0)?;
+        let ast = ast.downcast_ref::<AstStatement>().unwrap();
+        let query = ast.get_body();
+        let query = query.downcast_ref::<AstQuery>().unwrap();
+        let m = query.get_clause(0)?;
+        let m = m.downcast_ref::<AstMatch>().unwrap();
+
+        let pattern = m.get_pattern().unwrap();
+        assert_eq!(pattern.get_type(), AstNodeType::Pattern);
+
+        assert_eq!(pattern.npaths(), 1);
+        assert!(pattern.get_path(1).is_err());
+
+        let path = pattern.get_path(0)?;
+        assert_eq!(path.get_type(), AstNodeType::PatternPath);
 
         Ok(())
     }

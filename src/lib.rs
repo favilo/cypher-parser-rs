@@ -1,6 +1,9 @@
 use errno::Errno;
 use libcypher_parser_sys as cypher;
-use std::{num::ParseIntError, ffi::{CStr, FromBytesWithNulError, NulError}};
+use std::{
+    ffi::{CStr, FromBytesWithNulError, NulError},
+    num::ParseIntError,
+};
 use thiserror::Error;
 
 mod ast;
@@ -8,11 +11,11 @@ mod result;
 
 pub use {
     ast::*,
-    result::{ParseError, ParseFlags, ParseOption, ParseResult, ParserConfig, InputPosition},
+    result::{InputPosition, ParseError, ParseFlags, ParseOption, ParseResult, ParserConfig},
 };
 
 #[non_exhaustive]
-#[derive(Error, Debug)]
+#[derive(Error, Debug, PartialEq)]
 pub enum CypherParserError {
     #[error("parse error: {0}")]
     ParserError(Errno),
@@ -25,6 +28,9 @@ pub enum CypherParserError {
 
     #[error("wrong ast node type: {0}")]
     WrongAstType(AstNodeType),
+
+    #[error("Invalid ast node type: {0}")]
+    InvalidType(usize),
 
     #[error("error creating c-string")]
     CStringError(#[from] NulError),

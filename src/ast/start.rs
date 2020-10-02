@@ -628,11 +628,16 @@ mod tests {
 
         let comparison = predicate.downcast_ref::<AstComparison>().unwrap();
 
-        // TODO: Implement AstComparison
         assert_eq!(comparison.get_length(), 1);
-        // assert_eq!(comparison.get_operator(0)?.0, unsafe { *cypher::CYPHER_OP_GT });
-        // assert_eq!(comparison.get_argument(0)?.get_type()?, AstNodeType::PropertyOperator);
-        // assert_eq!(comparison.get_argument(1)?.get_type()?, AstNodeType::Integer);
+        assert_eq!(comparison.get_operator(0)?, Operator::Gt);
+        assert_eq!(
+            comparison.get_argument(0)?.get_type()?,
+            AstNodeType::PropertyOperator
+        );
+        assert_eq!(
+            comparison.get_argument(1)?.get_type()?,
+            AstNodeType::Integer
+        );
 
         Ok(())
     }

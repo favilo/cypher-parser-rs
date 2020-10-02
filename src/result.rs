@@ -72,6 +72,34 @@ impl ParserConfig {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum RelDirection {
+    OutBound,
+    InBound,
+    Bidirectional,
+}
+
+impl Into<RelDirection> for cypher::cypher_rel_direction {
+    fn into(self) -> RelDirection {
+        match self {
+            cypher::cypher_rel_direction::CYPHER_REL_OUTBOUND => RelDirection::OutBound,
+            cypher::cypher_rel_direction::CYPHER_REL_INBOUND => RelDirection::InBound,
+            cypher::cypher_rel_direction::CYPHER_REL_BIDIRECTIONAL => RelDirection::Bidirectional,
+        }
+    }
+}
+
+impl Into<cypher::cypher_rel_direction> for RelDirection {
+    fn into(self) -> cypher::cypher_rel_direction {
+        match self {
+            RelDirection::OutBound => cypher::cypher_rel_direction::CYPHER_REL_OUTBOUND,
+            RelDirection::InBound => cypher::cypher_rel_direction::CYPHER_REL_INBOUND,
+            RelDirection::Bidirectional => cypher::cypher_rel_direction::CYPHER_REL_BIDIRECTIONAL,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum Operator {
     Or,
     Xor,
@@ -105,12 +133,133 @@ pub enum Operator {
 }
 
 impl Operator {
-    pub fn from(other: cypher::cypher_operator) -> Self {
-        todo!()
+    pub fn from(other: *const cypher::cypher_operator) -> Result<Self, CypherParserError> {
+        unsafe {
+            if other == cypher::CYPHER_OP_OR {
+                return Ok(Self::Or);
+            }
+            if other == cypher::CYPHER_OP_XOR {
+                return Ok(Self::Xor);
+            }
+            if other == cypher::CYPHER_OP_AND {
+                return Ok(Self::And);
+            }
+            if other == cypher::CYPHER_OP_NOT {
+                return Ok(Self::Not);
+            }
+            if other == cypher::CYPHER_OP_EQUAL {
+                return Ok(Self::Equal);
+            }
+            if other == cypher::CYPHER_OP_NEQUAL {
+                return Ok(Self::NEqual);
+            }
+            if other == cypher::CYPHER_OP_LT {
+                return Ok(Self::Lt);
+            }
+            if other == cypher::CYPHER_OP_GT {
+                return Ok(Self::Gt);
+            }
+            if other == cypher::CYPHER_OP_LTE {
+                return Ok(Self::LtE);
+            }
+            if other == cypher::CYPHER_OP_GTE {
+                return Ok(Self::GtE);
+            }
+            if other == cypher::CYPHER_OP_PLUS {
+                return Ok(Self::Plus);
+            }
+            if other == cypher::CYPHER_OP_MINUS {
+                return Ok(Self::Minus);
+            }
+            if other == cypher::CYPHER_OP_MULT {
+                return Ok(Self::Mult);
+            }
+            if other == cypher::CYPHER_OP_DIV {
+                return Ok(Self::Div);
+            }
+            if other == cypher::CYPHER_OP_MOD {
+                return Ok(Self::Mod);
+            }
+            if other == cypher::CYPHER_OP_POW {
+                return Ok(Self::Pow);
+            }
+            if other == cypher::CYPHER_OP_UNARY_PLUS {
+                return Ok(Self::UPlus);
+            }
+            if other == cypher::CYPHER_OP_UNARY_MINUS {
+                return Ok(Self::UMinus);
+            }
+            if other == cypher::CYPHER_OP_REGEX {
+                return Ok(Self::Regex);
+            }
+            if other == cypher::CYPHER_OP_IN {
+                return Ok(Self::In);
+            }
+            if other == cypher::CYPHER_OP_STARTS_WITH {
+                return Ok(Self::StartsWith);
+            }
+            if other == cypher::CYPHER_OP_ENDS_WITH {
+                return Ok(Self::EndsWith);
+            }
+            if other == cypher::CYPHER_OP_CONTAINS {
+                return Ok(Self::Contains);
+            }
+            if other == cypher::CYPHER_OP_IS_NULL {
+                return Ok(Self::IsNull);
+            }
+            if other == cypher::CYPHER_OP_IS_NOT_NULL {
+                return Ok(Self::IsNotNull);
+            }
+            if other == cypher::CYPHER_OP_MAP_PROJECTION {
+                return Ok(Self::MapProjection);
+            }
+            if other == cypher::CYPHER_OP_SUBSCRIPT {
+                return Ok(Self::Subscript);
+            }
+            if other == cypher::CYPHER_OP_PROPERTY {
+                return Ok(Self::Property);
+            }
+            if other == cypher::CYPHER_OP_LABEL {
+                return Ok(Self::Label);
+            }
+            return Err(CypherParserError::NullPtrError("Operator::from"));
+        }
     }
 
-    pub(crate) fn to_c(&self) -> cypher::cypher_operator {
-       todo!()
+    pub(crate) fn to_c(&self) -> *const cypher::cypher_operator {
+        unsafe {
+            match self {
+                Operator::Or => cypher::CYPHER_OP_OR,
+                Operator::Xor => cypher::CYPHER_OP_XOR,
+                Operator::And => cypher::CYPHER_OP_AND,
+                Operator::Not => cypher::CYPHER_OP_NOT,
+                Operator::Equal => cypher::CYPHER_OP_EQUAL,
+                Operator::NEqual => cypher::CYPHER_OP_NEQUAL,
+                Operator::Lt => cypher::CYPHER_OP_LT,
+                Operator::Gt => cypher::CYPHER_OP_GT,
+                Operator::LtE => cypher::CYPHER_OP_LTE,
+                Operator::GtE => cypher::CYPHER_OP_GTE,
+                Operator::Plus => cypher::CYPHER_OP_PLUS,
+                Operator::Minus => cypher::CYPHER_OP_MINUS,
+                Operator::Mult => cypher::CYPHER_OP_MULT,
+                Operator::Div => cypher::CYPHER_OP_DIV,
+                Operator::Mod => cypher::CYPHER_OP_MOD,
+                Operator::Pow => cypher::CYPHER_OP_POW,
+                Operator::UPlus => cypher::CYPHER_OP_UNARY_PLUS,
+                Operator::UMinus => cypher::CYPHER_OP_UNARY_MINUS,
+                Operator::Regex => cypher::CYPHER_OP_REGEX,
+                Operator::In => cypher::CYPHER_OP_IN,
+                Operator::StartsWith => cypher::CYPHER_OP_STARTS_WITH,
+                Operator::EndsWith => cypher::CYPHER_OP_ENDS_WITH,
+                Operator::Contains => cypher::CYPHER_OP_CONTAINS,
+                Operator::IsNull => cypher::CYPHER_OP_IS_NULL,
+                Operator::IsNotNull => cypher::CYPHER_OP_IS_NOT_NULL,
+                Operator::MapProjection => cypher::CYPHER_OP_MAP_PROJECTION,
+                Operator::Subscript => cypher::CYPHER_OP_SUBSCRIPT,
+                Operator::Property => cypher::CYPHER_OP_PROPERTY,
+                Operator::Label => cypher::CYPHER_OP_LABEL,
+            }
+        }
     }
 }
 
@@ -212,7 +361,10 @@ impl ParseResult {
         // this seems to try to parse out an ast node of type 113, which doesn't exist...
         // May want to submit a PR.
         let ptr = unsafe { cypher::cypher_parse_result_get_directive(self.ptr, idx as u32) };
-        (ptr != null_mut()).as_result(AstRoot { ptr }.to_sub()?, CypherParserError::OutOfRangeError(idx))
+        (ptr != null_mut()).as_result(
+            AstRoot { ptr }.to_sub()?,
+            CypherParserError::OutOfRangeError(idx),
+        )
     }
 
     pub fn directives<'a>(&'a self) -> AstNodeIter<'a, Box<dyn AstNode>, Self> {

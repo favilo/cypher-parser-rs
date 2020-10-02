@@ -1,4 +1,11 @@
+mod create;
+mod load_csv;
+mod r#match;
+mod pattern;
+mod query;
 mod start;
+mod statement;
+mod with;
 
 use crate::{
     result::{Colorization, InputRange, Operator},
@@ -9,7 +16,7 @@ use boolinator::Boolinator;
 use libcypher_parser_sys as cypher;
 use mopa::mopafy;
 use num_derive::FromPrimitive;
-use std::{convert::TryFrom, ffi::CStr, ptr::null_mut};
+use std::{convert::TryFrom, ffi::CStr, fmt, ptr::null_mut};
 use strum_macros::Display;
 
 pub use start::*;
@@ -138,17 +145,19 @@ macro_rules! make_ast_nodes {
         }
 
         impl TryFrom<u8> for AstNodeType {
+            type Error = CypherParserError;
+
             fn try_from(i: u8) -> Result<Self, CypherParserError> {
                 match i {
                     $($id => Ok(Self::$enum_name)),+,
-                    _ => Err(CypherParserError::OutOfRangeError(i as usize)),
+                    _ => Err(CypherParserError::InvalidType(i as usize)),
                 }
             }
-            type Error = CypherParserError;
         }
 
         $(
             paste::paste! {
+                #[derive(Debug, PartialEq)]
                 pub struct [<Ast $enum_name>] {
                     ptr: *const cypher::cypher_astnode,
                 }
@@ -297,237 +306,10 @@ make_ast_nodes! {
     MapProjectionAllProperties = 112,
 }
 
-impl AstStatement {
-    pub fn noptions(&self) -> usize {
-        unsafe { cypher::cypher_ast_statement_noptions(self.as_ptr()) as usize }
-    }
-
-    pub fn get_option(&self, idx: usize) -> Result<Box<dyn AstNode>, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_statement_get_option(self.as_ptr(), idx as u32) };
-        self.valid_ptr(ptr).as_result(
-            AstStatementOption { ptr }.to_sub()?,
-            CypherParserError::OutOfRangeError(idx),
-        )
-    }
-
-    pub fn options<'a>(&'a self) -> AstNodeIter<'a, Box<dyn AstNode>, Self> {
-        AstNodeIter {
-            obj: self,
-            idx: 0,
-            max: self.noptions(),
-            func: &Self::get_option,
-        }
-    }
-
-    pub fn get_body(&self) -> Result<Box<dyn AstNode>, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_statement_get_body(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstRoot { ptr }.to_sub()?,
-            CypherParserError::NullPtrError("Statement.get_body"),
-        )
-    }
-}
-
-impl AstCypherOption {
-    pub fn get_version(&self) -> Option<AstString> {
-        let ptr = unsafe { cypher::cypher_ast_cypher_option_get_version(self.as_ptr()) };
-        self.valid_ptr(ptr).as_some(AstString { ptr })
-    }
-
-    pub fn nparams(&self) -> usize {
-        unsafe { cypher::cypher_ast_cypher_option_nparams(self.as_ptr()) as usize }
-    }
-
-    pub fn get_param(&self, idx: usize) -> Result<AstCypherOptionParam, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_cypher_option_get_param(self.as_ptr(), idx as _) };
-        self.valid_ptr(ptr).as_result(
-            AstCypherOptionParam { ptr },
-            CypherParserError::OutOfRangeError(idx),
-        )
-    }
-}
-
-impl AstCypherOptionParam {
-    pub fn get_name(&self) -> Result<AstString, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_cypher_option_param_get_name(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstString { ptr },
-            CypherParserError::NullPtrError("CypherOptionParam.get_name"),
-        )
-    }
-
-    pub fn get_value(&self) -> Result<AstString, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_cypher_option_param_get_value(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstString { ptr },
-            CypherParserError::NullPtrError("CypherOptionParam.get_value"),
-        )
-    }
-}
-
-impl AstCreateNodePropIndex {
-    pub fn get_label(&self) -> Result<AstLabel, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_create_node_prop_index_get_label(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstLabel { ptr },
-            CypherParserError::NullPtrError("CreateNodePropIndex.get_label"),
-        )
-    }
-
-    pub fn get_prop_name(&self) -> Result<AstPropName, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_create_node_prop_index_get_prop_name(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstPropName { ptr },
-            CypherParserError::NullPtrError("CreateNodePropIndex.get_prop_name"),
-        )
-    }
-}
-
-impl AstDropNodePropIndex {
-    pub fn get_label(&self) -> Result<AstLabel, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_drop_node_prop_index_get_label(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstLabel { ptr },
-            CypherParserError::NullPtrError("DropNodePropIndex.get_label"),
-        )
-    }
-
-    pub fn get_prop_name(&self) -> Result<AstPropName, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_drop_node_prop_index_get_prop_name(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstPropName { ptr },
-            CypherParserError::NullPtrError("DropNodePropIndex.get_prop_name"),
-        )
-    }
-}
-
-impl AstCreateNodePropConstraint {
-    pub fn get_identifier(&self) -> Result<AstIdentifier, CypherParserError> {
-        let ptr =
-            unsafe { cypher::cypher_ast_create_node_prop_constraint_get_identifier(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstIdentifier { ptr },
-            CypherParserError::NullPtrError("CreateNodePropConstraint.get_identifier"),
-        )
-    }
-
-    pub fn get_label(&self) -> Result<AstLabel, CypherParserError> {
-        let ptr =
-            unsafe { cypher::cypher_ast_create_node_prop_constraint_get_label(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstLabel { ptr },
-            CypherParserError::NullPtrError("CreateNodePropConstraint.get_identifier"),
-        )
-    }
-
-    pub fn is_unique(&self) -> bool {
-        unsafe { cypher::cypher_ast_create_node_prop_constraint_is_unique(self.as_ptr()) }
-    }
-
-    pub fn get_expression(&self) -> Result<Box<dyn AstNode>, CypherParserError> {
-        let ptr =
-            unsafe { cypher::cypher_ast_create_node_prop_constraint_get_expression(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstExpression { ptr }.to_sub()?,
-            CypherParserError::NullPtrError("CreateNodePropConstraint.get_expression"),
-        )
-    }
-}
-
-impl AstDropNodePropConstraint {
-    pub fn get_identifier(&self) -> Result<AstIdentifier, CypherParserError> {
-        let ptr =
-            unsafe { cypher::cypher_ast_drop_node_prop_constraint_get_identifier(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstIdentifier { ptr },
-            CypherParserError::NullPtrError("DropNodePropConstraint.get_identifier"),
-        )
-    }
-
-    pub fn get_label(&self) -> Result<AstLabel, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_drop_node_prop_constraint_get_label(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstLabel { ptr },
-            CypherParserError::NullPtrError("DropNodePropConstraint.get_identifier"),
-        )
-    }
-
-    pub fn is_unique(&self) -> bool {
-        unsafe { cypher::cypher_ast_drop_node_prop_constraint_is_unique(self.as_ptr()) }
-    }
-
-    pub fn get_expression(&self) -> Result<Box<dyn AstNode>, CypherParserError> {
-        let ptr =
-            unsafe { cypher::cypher_ast_drop_node_prop_constraint_get_expression(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstExpression { ptr }.to_sub()?,
-            CypherParserError::NullPtrError("DropNodePropConstraint.get_expression"),
-        )
-    }
-}
-
-impl AstCreateRelPropConstraint {
-    pub fn get_identifier(&self) -> Result<AstIdentifier, CypherParserError> {
-        let ptr =
-            unsafe { cypher::cypher_ast_create_rel_prop_constraint_get_identifier(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstIdentifier { ptr },
-            CypherParserError::NullPtrError("CreateRelPropConstraint.get_identifier"),
-        )
-    }
-
-    pub fn get_reltype(&self) -> Result<AstReltype, CypherParserError> {
-        let ptr =
-            unsafe { cypher::cypher_ast_create_rel_prop_constraint_get_reltype(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstReltype { ptr },
-            CypherParserError::NullPtrError("CreateRelPropConstraint.get_identifier"),
-        )
-    }
-
-    pub fn is_unique(&self) -> bool {
-        unsafe { cypher::cypher_ast_create_rel_prop_constraint_is_unique(self.as_ptr()) }
-    }
-
-    pub fn get_expression(&self) -> Result<Box<dyn AstNode>, CypherParserError> {
-        let ptr =
-            unsafe { cypher::cypher_ast_create_rel_prop_constraint_get_expression(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstExpression { ptr }.to_sub()?,
-            CypherParserError::NullPtrError("CreateRelPropConstraint.get_expression"),
-        )
-    }
-}
-
-impl AstDropRelPropConstraint {
-    pub fn get_identifier(&self) -> Result<AstIdentifier, CypherParserError> {
-        let ptr =
-            unsafe { cypher::cypher_ast_drop_rel_prop_constraint_get_identifier(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstIdentifier { ptr },
-            CypherParserError::NullPtrError("DropRelPropConstraint.get_identifier"),
-        )
-    }
-
-    pub fn get_reltype(&self) -> Result<AstReltype, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_drop_rel_prop_constraint_get_reltype(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstReltype { ptr },
-            CypherParserError::NullPtrError("DropRelPropConstraint.get_identifier"),
-        )
-    }
-
-    pub fn is_unique(&self) -> bool {
-        unsafe { cypher::cypher_ast_drop_rel_prop_constraint_is_unique(self.as_ptr()) }
-    }
-
-    pub fn get_expression(&self) -> Result<Box<dyn AstNode>, CypherParserError> {
-        let ptr =
-            unsafe { cypher::cypher_ast_drop_rel_prop_constraint_get_expression(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstExpression { ptr }.to_sub()?,
-            CypherParserError::NullPtrError("DropRelPropConstraint.get_expression"),
-        )
+impl fmt::Debug for dyn AstNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: Make this more useful
+        write!(f, "{} node", self.get_type().unwrap())
     }
 }
 
@@ -575,73 +357,6 @@ impl AstQuery {
     }
 }
 
-impl AstUsingPeriodicCommit {
-    pub fn get_limit(&self) -> Option<AstInteger> {
-        let ptr = unsafe { cypher::cypher_ast_using_periodic_commit_get_limit(self.as_ptr()) };
-        self.valid_ptr(ptr).as_some(AstInteger { ptr })
-    }
-}
-
-impl AstLoadCsv {
-    pub fn has_with_headers(&self) -> bool {
-        unsafe { cypher::cypher_ast_load_csv_has_with_headers(self.as_ptr()) }
-    }
-
-    pub fn get_url(&self) -> Result<Box<dyn AstNode>, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_load_csv_get_url(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstExpression { ptr }.to_sub()?,
-            CypherParserError::NullPtrError("LoadCsv.get_url"),
-        )
-    }
-
-    pub fn get_identifier(&self) -> Result<AstIdentifier, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_load_csv_get_identifier(self.as_ptr()) };
-        self.valid_ptr(ptr).as_result(
-            AstIdentifier { ptr },
-            CypherParserError::NullPtrError("LoadCsv.get_url"),
-        )
-    }
-
-    pub fn get_field_terminator(&self) -> Option<AstString> {
-        let ptr = unsafe { cypher::cypher_ast_load_csv_get_field_terminator(self.as_ptr()) };
-        self.valid_ptr(ptr).as_some(AstString { ptr })
-    }
-}
-
-impl AstMatch {
-    pub fn get_pattern(&self) -> Option<AstPattern> {
-        let ptr = unsafe { cypher::cypher_ast_match_get_pattern(self.as_ptr()) };
-
-        self.valid_ptr(ptr).as_some(AstPattern { ptr })
-    }
-
-    pub fn is_optional(&self) -> bool {
-        todo!()
-    }
-
-    pub fn nhints(&self) -> usize {
-        todo!()
-    }
-
-    pub fn get_hint(&self, _idx: usize) -> Result<AstMatchHint, CypherParserError> {
-        todo!()
-    }
-
-    pub fn hints<'a>(&'a self) -> AstNodeIter<'a, AstMatchHint, Self> {
-        AstNodeIter {
-            obj: self,
-            idx: 0,
-            max: self.nhints(),
-            func: &Self::get_hint,
-        }
-    }
-
-    pub fn get_predicate(&self) -> Option<Box<dyn AstNode>> {
-        todo!()
-    }
-}
-
 impl AstComparison {
     pub fn get_length(&self) -> usize {
         unsafe { cypher::cypher_ast_comparison_get_length(self.as_ptr()) as usize }
@@ -649,44 +364,20 @@ impl AstComparison {
 
     pub fn get_operator(&self, idx: usize) -> Result<Operator, CypherParserError> {
         let ptr = unsafe { cypher::cypher_ast_comparison_get_operator(self.as_ptr(), idx as u32) };
-        (ptr != null_mut()).as_result_from(
-            ||Operator::from(unsafe { *ptr }),
-            ||CypherParserError::OutOfRangeError(idx)
-        );
-        todo!()
+        Operator::from(ptr)
+    }
+
+    pub fn get_argument(&self, idx: usize) -> Result<Box<dyn AstNode>, CypherParserError> {
+        let ptr = unsafe { cypher::cypher_ast_comparison_get_argument(self.as_ptr(), idx as u32) };
+        self.valid_ptr(ptr).as_result_from(
+            || AstExpression { ptr }.to_sub().unwrap(),
+            || CypherParserError::NullPtrError("Comparison::get_argument"),
+        )
     }
 }
 
 impl AstAny {
     // indicator type
-}
-
-impl AstPattern {
-    pub fn get_identifier(&self) -> Option<AstIdentifier> {
-        todo!()
-    }
-
-    pub fn nlabels(&self) -> usize {
-        todo!()
-    }
-
-    pub fn get_label(&self, _idx: usize) -> Result<AstLabel, CypherParserError> {
-        todo!()
-    }
-
-    pub fn labels<'a>(&'a self) -> AstNodeIter<'a, AstLabel, Self> {
-        AstNodeIter {
-            obj: self,
-            idx: 0,
-            max: self.nlabels(),
-            func: &Self::get_label,
-        }
-    }
-
-    pub fn get_properties(&self) -> Option<Box<dyn AstNode>> {
-        // ast_map or ast_parameter
-        todo!()
-    }
 }
 
 impl AstIndexName {
@@ -753,17 +444,6 @@ impl AstReturn {
     }
 }
 
-impl AstCreate {
-    pub fn is_unique(&self) -> bool {
-        unsafe { cypher::cypher_ast_create_is_unique(self.as_ptr()) }
-    }
-
-    pub fn get_pattern(&self) -> Option<AstPattern> {
-        let ptr = unsafe { cypher::cypher_ast_create_get_pattern(self.as_ptr()) };
-        self.valid_ptr(ptr).as_some(AstPattern { ptr })
-    }
-}
-
 impl AstPropName {
     pub fn get_value(&self) -> String {
         let s = unsafe {
@@ -771,20 +451,6 @@ impl AstPropName {
             CStr::from_ptr(s)
         };
         s.to_string_lossy().into_owned()
-    }
-}
-
-impl AstPattern {
-    pub fn npaths(&self) -> usize {
-        unsafe { cypher::cypher_ast_pattern_npaths(self.as_ptr()) as usize }
-    }
-
-    pub fn get_path(&self, idx: usize) -> Result<AstPatternPath, CypherParserError> {
-        let ptr = unsafe { cypher::cypher_ast_pattern_get_path(self.as_ptr(), idx as u32) };
-        self.valid_ptr(ptr).as_result(
-            AstPatternPath { ptr },
-            CypherParserError::OutOfRangeError(idx),
-        )
     }
 }
 
@@ -799,7 +465,7 @@ impl AstProjection {
         let ptr = unsafe { cypher::cypher_ast_projection_get_expression(self.as_ptr()) };
         self.valid_ptr(ptr).as_result(
             AstExpression { ptr }.to_sub()?,
-            CypherParserError::NullPtrError("Projection.get_expression"),
+            CypherParserError::NullPtrError("Projection::get_expression"),
         )
     }
 }
@@ -809,7 +475,7 @@ impl AstPropertyOperator {
         let ptr = unsafe { cypher::cypher_ast_property_operator_get_expression(self.as_ptr()) };
         self.valid_ptr(ptr).as_result(
             AstExpression { ptr }.to_sub()?,
-            CypherParserError::NullPtrError("PropertyOperator.get_expression"),
+            CypherParserError::NullPtrError("PropertyOperator::get_expression"),
         )
     }
 
@@ -817,7 +483,7 @@ impl AstPropertyOperator {
         let ptr = unsafe { cypher::cypher_ast_property_operator_get_prop_name(self.as_ptr()) };
         self.valid_ptr(ptr).as_result(
             AstPropName { ptr },
-            CypherParserError::NullPtrError("PropertyOperator.get_prop_name"),
+            CypherParserError::NullPtrError("PropertyOperator::get_prop_name"),
         )
     }
 }
@@ -923,34 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_simple_create() -> Result<(), CypherParserError> {
-        let result = ParseResult::parse(
-            "CREATE (n)-[:KNOWS]->(f);",
-            None,
-            None,
-            ParseOption::Default.into(),
-        )?;
-
-        let ast = result.get_directive(0)?;
-        assert_eq!(ast.get_type()?, AstNodeType::Statement);
-        let ast = ast.downcast_ref::<AstStatement>().unwrap();
-        let query = ast.get_body()?;
-        assert_eq!(query.get_type()?, AstNodeType::Query);
-        let query = query.downcast_ref::<AstQuery>().unwrap();
-
-        let create = query.get_clause(0)?;
-        assert_eq!(create.get_type()?, AstNodeType::Create);
-        let create = create.downcast_ref::<AstCreate>().unwrap();
-        assert!(!create.is_unique());
-
-        let pattern = create.get_pattern().unwrap();
-        assert_eq!(pattern.get_type()?, AstNodeType::Pattern);
-        assert_eq!(pattern.npaths(), 1);
-
-        Ok(())
-    }
-
-    #[test]
     fn parse_single_node() -> Result<(), CypherParserError> {
         let result = ParseResult::parse(
             "MATCH (n) RETURN n;",
@@ -974,220 +612,6 @@ mod tests {
 
         let path = pattern.get_path(0)?;
         assert_eq!(path.get_type()?, AstNodeType::PatternPath);
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_statement_with_cypher_option() -> Result<(), CypherParserError> {
-        let result =
-            ParseResult::parse("CYPHER RETURN 1;", None, None, ParseOption::Default.into())?;
-
-        let statement = result.get_directive(0)?;
-        let statement = statement.downcast_ref::<AstStatement>().unwrap();
-        assert_eq!(statement.nchildren(), 2);
-
-        assert_eq!(statement.noptions(), 1);
-        let mut options: Vec<_> = statement.options().collect();
-        let option = options.pop().unwrap();
-        assert!(option.instance_of(AstNodeType::StatementOption));
-        assert_eq!(option.get_type()?, AstNodeType::CypherOption);
-        let option = option.downcast_ref::<AstCypherOption>().unwrap();
-
-        assert!(option.get_version().is_none());
-        assert_eq!(option.nparams(), 0);
-        assert!(option.get_param(0).is_err());
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_statement_with_cypher_option_containing_version_and_params(
-    ) -> Result<(), CypherParserError> {
-        let result = ParseResult::parse(
-            "CYPHER 2.3 runtime=fast planner=slow RETURN 1;",
-            None,
-            None,
-            ParseOption::Default.into(),
-        )?;
-
-        let statement = result.get_directive(0)?;
-        let statement = statement.downcast_ref::<AstStatement>().unwrap();
-        assert_eq!(statement.nchildren(), 2);
-
-        assert_eq!(statement.noptions(), 1);
-        let option = statement.get_option(0)?;
-        assert!(option.instance_of(AstNodeType::StatementOption));
-        assert_eq!(option.get_type()?, AstNodeType::CypherOption);
-        let option = option.downcast_ref::<AstCypherOption>().unwrap();
-
-        let version = option.get_version().unwrap();
-        assert_eq!(version.get_value(), "2.3");
-        assert_eq!(option.nparams(), 2);
-        let param = option.get_param(0)?;
-        assert_eq!(param.get_name().unwrap().get_value(), "runtime");
-        assert_eq!(param.get_value().unwrap().get_value(), "fast");
-        let param = option.get_param(1)?;
-        assert_eq!(param.get_name().unwrap().get_value(), "planner");
-        assert_eq!(param.get_value().unwrap().get_value(), "slow");
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_statement_with_explain_option() -> Result<(), CypherParserError> {
-        let result =
-            ParseResult::parse("EXPLAIN RETURN 1;", None, None, ParseOption::Default.into())?;
-
-        let statement = result.get_directive(0)?;
-        let statement = statement.downcast_ref::<AstStatement>().unwrap();
-        assert_eq!(statement.nchildren(), 2);
-
-        assert_eq!(statement.noptions(), 1);
-        let option = statement.get_option(0)?;
-        assert!(option.instance_of(AstNodeType::StatementOption));
-        assert_eq!(option.get_type()?, AstNodeType::ExplainOption);
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_statement_with_profile_option() -> Result<(), CypherParserError> {
-        let result =
-            ParseResult::parse("PROFILE RETURN 1;", None, None, ParseOption::Default.into())?;
-
-        let statement = result.get_directive(0)?;
-        let statement = statement.downcast_ref::<AstStatement>().unwrap();
-        assert_eq!(statement.nchildren(), 2);
-
-        assert_eq!(statement.noptions(), 1);
-        let option = statement.get_option(0)?;
-        for o in statement.options() {
-            assert_eq!(option.get_type()?, o.get_type()?);
-        }
-        assert!(option.instance_of(AstNodeType::StatementOption));
-        assert_eq!(option.get_type()?, AstNodeType::ProfileOption);
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_create_unique_node_prop_constraint() -> Result<(), CypherParserError> {
-        let result = ParseResult::parse(
-            "CREATE CONSTRAINT ON (f:Foo) ASSERT f.bar IS UNIQUE;",
-            None,
-            None,
-            ParseOption::Default.into(),
-        )?;
-
-        let statement = result.get_directive(0)?;
-        let statement = statement.downcast_ref::<AstStatement>().unwrap();
-        assert_eq!(statement.nchildren(), 1);
-
-        assert_eq!(statement.noptions(), 0);
-        assert!(statement.get_option(0).is_err());
-
-        let body = statement.get_body()?;
-        assert_eq!(body.get_type()?, AstNodeType::CreateNodePropConstraint);
-
-        let range = body.range();
-        assert_eq!(range.start().offset(), 0);
-        assert_eq!(range.end().offset(), 51);
-
-        let body = body.downcast_ref::<AstCreateNodePropConstraint>().unwrap();
-        assert_eq!(body.get_identifier()?.get_name(), "f");
-        assert_eq!(body.get_label()?.get_name(), "Foo");
-
-        let expression = body.get_expression()?;
-        assert!(expression.instance_of(AstNodeType::Expression));
-        assert_eq!(expression.get_type()?, AstNodeType::PropertyOperator);
-
-        let expression = expression.downcast_ref::<AstPropertyOperator>().unwrap();
-        let expr = expression.get_expression()?;
-
-        assert!(expr.instance_of(AstNodeType::Expression));
-        assert_eq!(expr.get_type()?, AstNodeType::Identifier);
-
-        assert_eq!(
-            expr.downcast_ref::<AstIdentifier>().unwrap().get_name(),
-            "f"
-        );
-        let prop_name = expression.get_prop_name()?;
-        assert_eq!(prop_name.get_value(), "bar");
-
-        assert!(body.is_unique());
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_query_with_periodic_commit_option() -> Result<(), CypherParserError> {
-        let result = ParseResult::parse(
-            "USING PERIODIC COMMIT 500 CREATE (n);",
-            None,
-            None,
-            ParseOption::Default.into(),
-        )?;
-
-        let statement = result.get_directive(0)?;
-        let statement = statement.downcast_ref::<AstStatement>().unwrap();
-        assert_eq!(statement.nchildren(), 1);
-
-        assert_eq!(statement.noptions(), 0);
-        assert!(statement.get_option(0).is_err());
-
-        let body = statement.get_body()?;
-        assert_eq!(body.get_type()?, AstNodeType::Query);
-
-        let body = body.downcast_ref::<AstQuery>().unwrap();
-        assert_eq!(body.noptions(), 1);
-
-        let mut options: Vec<_> = body.options().collect();
-        let option = options.pop().unwrap();
-        assert_eq!(option.get_type()?, AstNodeType::UsingPeriodicCommit);
-
-        let option = option.downcast_ref::<AstUsingPeriodicCommit>().unwrap();
-        assert_eq!(option.get_limit().unwrap().get_value()?, 500);
-
-        Ok(())
-    }
-
-    #[test]
-    fn parse_load_csv() -> Result<(), CypherParserError> {
-        let result = ParseResult::parse(
-            "LOAD CSV FROM 'file:///movies.csv' AS m RETURN m;",
-            None,
-            None,
-            ParseOption::Default.into(),
-        )?;
-
-        let statement = result.get_directive(0)?;
-        let statement = statement.downcast_ref::<AstStatement>().unwrap();
-        assert_eq!(statement.nchildren(), 1);
-
-        assert_eq!(statement.noptions(), 0);
-        assert!(statement.get_option(0).is_err());
-
-        let body = statement.get_body()?;
-        assert_eq!(body.get_type()?, AstNodeType::Query);
-
-        let query = body.downcast_ref::<AstQuery>().unwrap();
-        assert_eq!(query.noptions(), 0);
-
-        let clause = query.get_clause(0)?;
-        assert_eq!(clause.get_type()?, AstNodeType::LoadCsv);
-
-        let clause = clause.downcast_ref::<AstLoadCsv>().unwrap();
-        assert!(!clause.has_with_headers());
-
-        let url = clause.get_url()?;
-        assert_eq!(url.get_type()?, AstNodeType::String);
-        let url = url.downcast_ref::<AstString>().unwrap();
-        assert_eq!(url.get_value(), "file:///movies.csv");
-        let id = clause.get_identifier()?;
-        assert_eq!(id.get_name(), "m");
-
-        assert!(clause.get_field_terminator().is_none());
 
         Ok(())
     }
